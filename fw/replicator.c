@@ -54,11 +54,11 @@
 // LOCK  FF     CF
 
 
-
 #include <inttypes.h>
 #include <avr/io.h>
 #include <avr/boot.h>
 #include <avr/pgmspace.h>
+#define __DELAY_BACKWARD_COMPATIBLE__ 
 #include <util/delay.h>
 #include "pic_code.h"
 #include "pic_conf.h"
@@ -94,15 +94,6 @@
 #define DDR(x)  concat(DDR,x)
 
 #define usleep(x) _delay_us(x)
-
-//TODO: needed?
-void  __attribute__ ((naked)) TIMER1_COMPA_vect(void){
-  __asm("in  r0, 0x3f"  );    //Status sichern
-  __asm("inc r3"       );    //tic++;
-  __asm("out  0x3f, r0");    //Status wiederherstellen
-  __asm("reti         ");
-}
-
 
 int getch() {
   if (!(UCSR0A&1<<RXC0))
@@ -386,34 +377,34 @@ uint8_t avr_isp_program() {
   putch('L');
   uint8_t lfuse=boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS     );
   send_hex(lfuse);
-//  avr_isp_cmd(0xAC,0xA0,0x00,lfuse);
-//  usleep(5000); // wait for more than 4.5ms (5ms)
-  send_hex(avr_isp_cmd(0x50,0x00,0x00,0x00));
-//  if (avr_isp_cmd(0x50,0x00,0x00,0x00)!=lfuse) return 0;
-//
+  avr_isp_cmd(0xAC,0xA0,0x00,lfuse);
+  usleep(5000); // wait for more than 4.5ms (5ms)
+  uint8_t lfuse_read=avr_isp_cmd(0x50,0x00,0x00,0x00);
+  if (lfuse_read!=lfuse) return 0;
+
   putch('H');
   uint8_t hfuse=boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS    );
   send_hex(hfuse);
-//  avr_isp_cmd(0xAC,0xA8,0x00,hfuse);
-//  usleep(5000); // wait for more than 4.5ms (5ms)
-  send_hex(avr_isp_cmd(0x58,0x08,0x00,0x00));
-//  if (avr_isp_cmd(0x58,0x08,0x00,0x00)!=hfuse) return 0;
-//
+  avr_isp_cmd(0xAC,0xA8,0x00,hfuse);
+  usleep(5000); // wait for more than 4.5ms (5ms)
+  uint8_t hfuse_read=avr_isp_cmd(0x58,0x08,0x00,0x00);
+  if (hfuse_read!=hfuse) return 0;
+
   putch('E');
   uint8_t efuse=boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS);
   send_hex(efuse);
-//  avr_isp_cmd(0xAC,0xA4,0x00,efuse);
-//  usleep(5000); // wait for more than 4.5ms (5ms)
-  send_hex(avr_isp_cmd(0x50,0x08,0x00,0x00));
-//  if (avr_isp_cmd(0x50,0x08,0x00,0x00)!=efuse) return 0;
-//
-   putch('C');
+  avr_isp_cmd(0xAC,0xA4,0x00,efuse);
+  usleep(5000); // wait for more than 4.5ms (5ms)
+  uint8_t efuse_read=avr_isp_cmd(0x50,0x08,0x00,0x00);
+  if (efuse_read!=efuse) return 0;
+
+  putch('C');
   uint8_t lock =boot_lock_fuse_bits_get(GET_LOCK_BITS         );
   send_hex(lock);
-//  avr_isp_cmd(0xAC,0xE0,0x00,lock );
-//  usleep(5000); // wait for more than 4.5ms (5ms)
-  send_hex(avr_isp_cmd(0x58,0x00,0x00,0x00));
-//  if (avr_isp_cmd(0x58,0x00,0x00,0x00)!=lock ) return 0;
+  avr_isp_cmd(0xAC,0xE0,0x00,lock );
+  usleep(5000); // wait for more than 4.5ms (5ms)
+  uint8_t lock_read=avr_isp_cmd(0x58,0x00,0x00,0x00);
+  if (lock_read!=lock ) return 0;
 
   return 1; 
 }
@@ -422,7 +413,7 @@ void pic_manual() {
   pic_icsp_leave();
   usleep(1000);
   if (pic_icsp_enter())
-    send_msg("PIC\n\r");
+    send_msg("PIC\r\n");
   while(1) {
     int c;
     uint16_t data;
@@ -451,7 +442,7 @@ void pic_manual() {
         pic_icsp_leave();
         usleep(1000);
         if (pic_icsp_enter())
-          send_msg("PIC\n\r");
+          send_msg("PIC\r\n");
         break;
       case 'p':
         pic_icsp_leave();
@@ -481,7 +472,7 @@ void main() {
   DDR(LED_PORT)|=1<<LED_PIN;
   flash_led(100,100,10); // say hello
   flash_led(1000,1000,1); // say hello
-  send_msg("PTL-INO REPLICATOR\n\rPress P or A to enter manual PIC or AVR modes\n\r");
+  send_msg("\r\n\r\nPTL-INO REPLICATOR\r\nPress P or A to enter manual PIC or AVR modes\r\n\r\n");
   while (1) {
     int c;
     if ((c=getch())!=-1) {
@@ -497,22 +488,39 @@ void main() {
       flash_led(125,1250,1);
       // AUTOMATIC PROCEDURE
       // PIC PROGRAMMING
+      send_msg("Trying to enter PIC programming mode...\r\n");
       if (pic_icsp_enter()) {
+        send_msg("... PIC found! Programming it...\r\n");
         flash_led(100,400,3); // signal PIC programming attempt
-        if (pic_icsp_program())
+        if (pic_icsp_program()) {
+          send_msg("... PIC programming SUCCESSFUL...\r\n");
           flash_led(100,100,5); // signal success
-        else
+        }
+        else {
+          send_msg("... PIC programming FAILED...\r\n");
           flash_led(900,100,5); // signal error
+        }
       }
+      else {
+        send_msg("... no PIC found...\r\n");
+      }
+      send_msg("... leaving PIC programming mode\r\n\r\n");
       pic_icsp_leave();
       // AVR PROGRAMMING
+      send_msg("Trying to enter AVR programming mode...\r\n");
       if (avr_isp_enter()) {
+        send_msg("... AVR found! Programming it...\r\n");
         flash_led(400,100,3); // signal AVR programming attempt
-        if (avr_isp_program())
+        if (avr_isp_program()) {
+          send_msg("... AVR programming SUCCESSFUL...\r\n");
           flash_led(100,100,5); // signal success
-        else
+        }
+        else {
+          send_msg("... AVR programming FAILED...\r\n");
           flash_led(900,100,5); // signal error
+        }
       }
+      send_msg("... leaving AVR programming mode\r\n\r\n");
       avr_isp_leave();
     }
   }
