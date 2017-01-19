@@ -25,7 +25,8 @@ F_CPU = 16000000
 
 CFLAGS  = -std=c99 -mmcu=$(DEVICE) -DF_CPU=$(F_CPU) -O2
 
-AVRDUDEFLAGS = -c arduino -p $(DEVICE) -P/dev/tty.usbmodem00000001
+#AVRDUDEFLAGS = -c arduino -p $(DEVICE) -P/dev/tty.usbmodem00000001
+AVRDUDEFLAGS = -c arduino -p $(DEVICE) -P/dev/tty.usbmodemPTL-041
 
 SREC    = srec_cat
 CC      = avr-gcc
@@ -39,13 +40,16 @@ hex: replicator.hex
 clean:
 	rm -f replicator.hex replicator.elf pic_code.h pic_conf.h
 
+avr_code.h: optiboot_atmega328.hex
+	#TODO: error handling...
+	$(SREC) $< -intel -o -carray avr_code -dataonly | sed 's/\[\]/\[\] PROGMEM/' > $@
 pic_code.h: pic.hex
 	#TODO: error handling...
 	$(SREC) $< -intel -crop 0x00000 0x10000 -o -carray pic_code -dataonly | sed 's/\[\]/\[\] PROGMEM/' > $@
 pic_conf.h: pic.hex
 	$(SREC) $< -intel -crop 0x1000E 0x10012 -offset -0x1000E -o $@ -carray pic_conf -dataonly
 
-replicator.elf: replicator.c pic_code.h pic_conf.h
+replicator.elf: replicator.c pic_code.h pic_conf.h avr_code.h
 	$(CC) $(CFLAGS) replicator.c -o replicator.elf
 
 replicator.hex: replicator.elf

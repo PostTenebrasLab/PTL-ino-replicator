@@ -60,6 +60,7 @@
 #include <avr/pgmspace.h>
 #define __DELAY_BACKWARD_COMPATIBLE__ 
 #include <util/delay.h>
+#include "avr_code.h"
 #include "pic_code.h"
 #include "pic_conf.h"
 
@@ -338,10 +339,18 @@ uint8_t avr_isp_program() {
   usleep(10000);                    // wait for more than 9.0ms (10ms)
 
   // PROGRAM FLASH
-  uint16_t addr=0;
+  uint16_t addr=0; // in words
   for (int ipage=0;ipage<(FLASHEND+1L)/SPM_PAGESIZE;++ipage) {
+    send_msg("page addr ");
+    send_hex(addr);
+    send_msg("\r\n");
     for (int i=0;i<SPM_PAGESIZE/2;++i) {
-      uint16_t data=pgm_read_word(addr<<1);
+      uint16_t data;
+      if (AVR_CODE_START<=(addr<<1) && (addr<<1)<AVR_CODE_FINISH)
+        data=pgm_read_byte(&avr_code[(addr<<1)-AVR_CODE_START  ])
+            |pgm_read_byte(&avr_code[(addr<<1)-AVR_CODE_START+1])<<8;
+      else
+        data=pgm_read_word(addr<<1);
       avr_isp_cmd(0x40,0x00,i,data>>0&0xFF);
       avr_isp_cmd(0x48,0x00,i,data>>8&0xFF);
       ++addr;
@@ -354,8 +363,16 @@ uint8_t avr_isp_program() {
   // VERIFY FLASH
   addr=0;
   for (int ipage=0;ipage<(FLASHEND+1L)/SPM_PAGESIZE;++ipage) {
+    send_msg("page addr ");
+    send_hex(addr);
+    send_msg("\r\n");
     for (int i=0;i<SPM_PAGESIZE/2;++i) {
-      uint16_t data=pgm_read_word(addr<<1);
+      uint16_t data;
+      if (AVR_CODE_START<=(addr<<1) && (addr<<1)<AVR_CODE_FINISH)
+        data=pgm_read_byte(&avr_code[(addr<<1)-AVR_CODE_START  ])
+            |pgm_read_byte(&avr_code[(addr<<1)-AVR_CODE_START+1])<<8;
+      else
+        data=pgm_read_word(addr<<1);
       uint8_t lo=avr_isp_cmd(0x20,addr>>8&0xFF,addr>>0&0xFF,0x00);
       uint8_t hi=avr_isp_cmd(0x28,addr>>8&0xFF,addr>>0&0xFF,0x00);
       if ((hi<<8|lo)!=data) {
@@ -366,8 +383,8 @@ uint8_t avr_isp_program() {
         send_hex(data);
         putch('\r');
         putch('\n');
+        return 0;
       }
-      if ((hi<<8|lo)!=data) return 0;
       ++addr;
     }
   }
@@ -404,9 +421,60 @@ uint8_t avr_isp_program() {
   avr_isp_cmd(0xAC,0xE0,0x00,lock );
   usleep(5000); // wait for more than 4.5ms (5ms)
   uint8_t lock_read=avr_isp_cmd(0x58,0x00,0x00,0x00);
+  send_hex(lock_read);
   if (lock_read!=lock ) return 0;
 
   return 1; 
+}
+
+void avr_manual() {
+  avr_isp_leave();
+  usleep(1000);
+  if (avr_isp_enter())
+    send_msg("AVR\r\n");
+  while(1) {
+    int c;
+    uint16_t data;
+    while ((c=getch())==-1);
+    switch (c) {
+      case 'E': case 'e': // exit
+        avr_isp_leave();
+      case 'F': case 'f': // read fuse bits
+        {
+        uint8_t lfuse=boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS     );
+        uint8_t hfuse=boot_lock_fuse_bits_get(GET_HIGH_FUSE_BITS    );
+        uint8_t efuse=boot_lock_fuse_bits_get(GET_EXTENDED_FUSE_BITS);
+        uint8_t lock =boot_lock_fuse_bits_get(GET_LOCK_BITS         );
+        uint8_t lfuse_read=avr_isp_cmd(0x50,0x00,0x00,0x00);
+        uint8_t hfuse_read=avr_isp_cmd(0x58,0x08,0x00,0x00);
+        uint8_t efuse_read=avr_isp_cmd(0x50,0x08,0x00,0x00);
+        uint8_t lock_read =avr_isp_cmd(0x58,0x00,0x00,0x00);
+        send_msg("low:  ");send_hex(lfuse);send_msg("\r\n");
+        send_msg("high: ");send_hex(hfuse);send_msg("\r\n");
+        send_msg("ext:  ");send_hex(efuse);send_msg("\r\n");
+        send_msg("lock: ");send_hex(lock );send_msg("\r\n");
+        send_msg("target low:  ");send_hex(lfuse_read);send_msg("\r\n");
+        send_msg("target high: ");send_hex(hfuse_read);send_msg("\r\n");
+        send_msg("target ext:  ");send_hex(efuse_read);send_msg("\r\n");
+        send_msg("target lock: ");send_hex(lock_read );send_msg("\r\n");
+        }
+      case 'r': case 'R':  // read
+        {
+        uint16_t addr=getnumber();
+        boot_rww_enable ();
+        uint16_t data=pgm_read_word(addr<<1);
+        uint8_t lo=avr_isp_cmd(0x20,addr>>8&0xFF,addr>>0&0xFF,0x00);
+        uint8_t hi=avr_isp_cmd(0x28,addr>>8&0xFF,addr>>0&0xFF,0x00);
+        send_hex(addr);
+        putch(':');
+        send_hex(hi<<8|lo);
+        putch('=');
+        send_hex(data);
+        putch('\r');
+        putch('\n');
+        }
+    }
+  }
 }
 
 void pic_manual() {
@@ -479,6 +547,7 @@ void main() {
       // ENTER MANUAL PROCEDURE
       switch (c) {
         case 'P': pic_manual();
+        case 'A': avr_manual();
       }
     }
     else {
