@@ -28,20 +28,16 @@
  * =========  ==============                                                  *
  * GND        GND                                                             *
  * +5V        +5V                                                             *
- * 2 (PD2)    11 (PB3, MOSI)                                                  *
- * 3 (PD3)    13 (PB5, SCK)                                                   *
- * 4 (PD4)    12 (PB4, MISO)                                                  *
- * 5 (PD5)    /RST                                                            *
- * 6 (PD6)    PIC MCLR                                                        *
- * 7 (PD7)    PIC CLK                                                         *
- * 8 (PB0)    PIC DAT                                                         *
+ * 18 (PC4)    /RST (AVR /RST)                                                *
+ * 10 (PB2)    13 (PB5, AVR SCK)                                              *
+ *  9 (PB1)    12 (PB4, AVR MISO)                                             *
+ *  8 (PB0)    11 (PB3, MOSI)                                                 *
+ *  7 (PD7)    PIC MCLR                                                       *
+ *  6 (PD6)    PIC DAT                                                        *
+ *  5 (PD5)    PIC CLK                                                        *
  *                                                                            *
  * LED: 13 (PB5)                                                              *
- *                                                                            *
- *                                                                            *
- * Ton (ms)   Toff (ms)  number  meaning                                      *
- * ========   =========  ======  =======                                      *
- * 100        100        1                                                    *
+ * Manual mode: A0 (PC0) (tie to GND to disable automatic programming)        *
  *                                                                            *
  ******************************************************************************/
 
@@ -69,25 +65,28 @@
 #define LED_PORT B
 #define LED_PIN  5
 
+#define MANUAL_MODE_PORT C
+#define MANUAL_MODE_PIN  0
+
 #define PIC_DEVICE_ID 0x3021
 #define AVR_SIGNATURE_0 0x1E
 #define AVR_SIGNATURE_1 0x95
 #define AVR_SIGNATURE_2 0x0F
 #define PIC_ICSP_MCLR_PORT D
-#define PIC_ICSP_MCLR_PIN  6
+#define PIC_ICSP_MCLR_PIN  7
 #define PIC_ICSP_CLK_PORT  D
-#define PIC_ICSP_CLK_PIN   7
-#define PIC_ICSP_DAT_PORT  B
-#define PIC_ICSP_DAT_PIN   0
+#define PIC_ICSP_CLK_PIN   5
+#define PIC_ICSP_DAT_PORT  D
+#define PIC_ICSP_DAT_PIN   6
 
-#define AVR_ISP_RST_PORT  D
-#define AVR_ISP_RST_PIN   5
-#define AVR_ISP_SCK_PORT  D
-#define AVR_ISP_SCK_PIN   3
-#define AVR_ISP_MOSI_PORT D
-#define AVR_ISP_MOSI_PIN  2
-#define AVR_ISP_MISO_PORT D
+#define AVR_ISP_RST_PORT  C
+#define AVR_ISP_RST_PIN   4
+#define AVR_ISP_SCK_PORT  B
+#define AVR_ISP_SCK_PIN   5
+#define AVR_ISP_MISO_PORT B
 #define AVR_ISP_MISO_PIN  4
+#define AVR_ISP_MOSI_PORT B
+#define AVR_ISP_MOSI_PIN  0
 
 #define concat(a,b) a ## b
 #define PORT(x) concat(PORT,x)
@@ -428,17 +427,29 @@ uint8_t avr_isp_program() {
 }
 
 void avr_manual() {
-  avr_isp_leave();
-  usleep(1000);
-  if (avr_isp_enter())
-    send_msg("AVR\r\n");
+  send_msg("AVR\r\nEntering AVR programming mode... ");
+  if (avr_isp_enter()) {
+    send_msg("OK\r\n");
+  }
+  else {
+    send_msg("FAILED. Leaving...\r\n");
+    avr_isp_leave();
+    return;
+  }
   while(1) {
+    send_msg("Options:\r\n"
+             " - F: read fuse bits\r\n"
+             " - R: read flash\r\n"
+             " - Q: quit\r\n"
+             "> \r\n"
+            );
     int c;
     uint16_t data;
     while ((c=getch())==-1);
     switch (c) {
-      case 'E': case 'e': // exit
+      case 'Q': case 'q': // exit
         avr_isp_leave();
+        return;
       case 'F': case 'f': // read fuse bits
         {
         uint8_t lfuse=boot_lock_fuse_bits_get(GET_LOW_FUSE_BITS     );
@@ -477,16 +488,139 @@ void avr_manual() {
   }
 }
 
+int readline(char *line,int n) {
+  int c=0;
+  int i=0;
+  while (i<n-1) {
+    while ((c=getch())==-1);
+    if (c=='\r' || c=='\n') return i;
+    line[i++]=c;
+  }
+  return i;
+}
+
+int32_t hex2int(char *str,int n) {
+  int i=0;
+  for (int j=0;j<n;++j) {
+    i*=16;
+    if (0<=str[j] && str[j]<='9')
+      i+=str[j]-'0';
+    else if ('A'<=str[j] && str[j]<='F')
+      i+=str[j]-'A'+10;
+    else if ('a'<=str[j] && str[j]<='f')
+      i+=str[j]-'a'+10;
+    else
+      return -1;
+  }
+  return i;
+}
+
+int parse_hex_file() {
+  char line[100]; // TODO: what is reasonable here?
+  int n;
+  int32_t extaddr=0;
+  uint32_t curraddr=0;
+  uint32_t lastaddr=0xFFFFFFFF;
+  int bytecount ;
+  int address   ;
+  int recordtype;
+  int checksum  ;
+  do {
+    while ((n=readline(line,sizeof(line)))==0);
+    if (n<11) return 0; // ':CCAAAARRSS'
+    if (line[0]!=':') return 0;
+    bytecount =hex2int(&line[  1],2);
+    address   =hex2int(&line[  3],4);
+    recordtype=hex2int(&line[  7],2);
+    checksum  =hex2int(&line[n-2],2);
+    if (bytecount <0) return 0;
+    if (address   <0) return 0;
+    if (recordtype<0) return 0;
+    if (checksum  <0) return 0;
+    if (n!=11+bytecount*2) return 0;
+    //send_msg("n: ");send_hex(n);send_msg("\r\n");
+    //send_msg("BC: ");send_hex(bytecount);send_msg("\r\n");
+    //send_msg("AD: ");send_hex(address);send_msg("\r\n");
+    //send_msg("RT: ");send_hex(recordtype);send_msg("\r\n");
+    //send_msg("CS: ");send_hex(checksum);send_msg("\r\n");
+    switch (recordtype) {
+      case 0x00:
+        if (bytecount%2!=0) return 0;
+        for (int i=0;i<bytecount;i+=2) {
+          uint8_t b1=hex2int(&line[9+2*i+0],2);
+          uint8_t b2=hex2int(&line[9+2*i+2],2);
+          uint16_t word=b2<<8|b1;
+          curraddr=extaddr<<16|address+i;
+          if (curraddr<lastaddr) {
+            if (curraddr>=0x10000UL) {
+              pic_icsp_cmd(0x00); // load configuration (addr=0x8000)
+              pic_icsp_write(0xFFFF); // TODO: dummy data
+              lastaddr=0x10000UL;
+            }
+            else {
+              pic_icsp_cmd(0x16); // reset address
+              lastaddr=0;
+            }
+          }
+          if (lastaddr<0x10000UL && curraddr>=0x10000UL) {
+            pic_icsp_cmd(0x00); // load configuration (addr=0x8000)
+            pic_icsp_write(0xFFFF); // TODO: dummy data
+            lastaddr=0x10000UL;
+          }
+          while (lastaddr<curraddr) {
+            pic_icsp_cmd(0x06);
+            lastaddr+=2;
+          }
+          pic_icsp_cmd(0x02); // load data
+          pic_icsp_write(word);
+          pic_icsp_cmd(0x08); // program 
+          usleep(3000); // wait >2.5ms (3ms) 
+          send_hex(curraddr>>16);send_hex(curraddr);send_msg("->");send_hex(word);send_msg("\r\n");
+        }
+        break;
+      case 0x04:
+        extaddr=hex2int(&line[9],4);
+        if (extaddr<0) return 0;
+        break;
+    }
+    // todo checksum validation
+  } while (recordtype!=0x01);
+}
+
+void pic_program_hex() {
+  parse_hex_file();
+}
+
 void pic_manual() {
-  pic_icsp_leave();
-  usleep(1000);
-  if (pic_icsp_enter())
-    send_msg("PIC\r\n");
+  send_msg("PIC\r\nEntering PIC programming mode... ");
+  if (pic_icsp_enter()) {
+    send_msg("OK\r\n");
+  }
+  else {
+    send_msg("FAILED. Leaving...\r\n");
+    pic_icsp_leave();
+    return;
+  }
   while(1) {
+    send_msg("Options:\r\n"
+             " - C: load configuration (0x00)\r\n"
+             " - D: load data          (0x02)\r\n"
+             " - I: increment address  (0x06)\r\n"
+             " - B: reset address      (0x16)\r\n"
+             " - R: read               (0x04)\r\n"
+             " - P: program            (0x08)\r\n"
+             " - X: erase              (0x09)\r\n"
+             " - H: program hex file\r\n"
+             " - Q: quit\r\n"
+             "> \r\n"
+            );
     int c;
     uint16_t data;
     while ((c=getch())==-1);
     switch (c) {
+      case 'Q': case 'q': // exit
+        pic_icsp_leave();
+        return;
       case 'C': case 'c':  // load configuration
         data=getnumber();
         pic_icsp_cmd(0x00);
@@ -506,49 +640,63 @@ void pic_manual() {
         putch('\r');
         putch('\n');
         break;
-      case 'P':
-        pic_icsp_leave();
-        usleep(1000);
-        if (pic_icsp_enter())
-          send_msg("PIC\r\n");
-        break;
-      case 'p':
-        pic_icsp_leave();
-        break;
       case 'I': case 'i':  // increment address
         pic_icsp_cmd(0x06);
         break;
-      case 'S': case 's':  // reset address
+      case 'B': case 'b':  // reset address
         pic_icsp_cmd(0x16);
         break;
-      case 'Q': case 'q': // program
+      case 'P': case 'p': // program
         pic_icsp_cmd(0x08);
         break;
       case 'X': case 'x': // erase
         pic_icsp_cmd(0x09);
         break;
-      case 'E': case 'e': // exit
-        pic_icsp_leave();
+      case 'H': case 'h': // hex file
+        pic_program_hex();
     }
   }
 }
 
+void manual_mode() {
+  send_msg("ENTERED MANUAL MODE\r\n");
+  int c;
+  do {
+    send_msg("Options:\r\n"
+             " - P: PIC\r\n"
+             " - A: AVR\r\n"
+             "> "
+            );
+    while ((c=getch())==-1);
+    switch (c) {
+      case 'p': case 'P': pic_manual();
+      case 'a': case 'A': avr_manual();
+    }
+  }  while (!(c=='q' || c=='!'));
+  send_msg("LEAVING MANUAL MODE");
+}
 void main() {
+  uint8_t programmed_pic=0;
+  uint8_t programmed_avr=0;
+
   UBRR0=F_CPU/16/BAUD-1; // TODO: correct rounding
   UCSR0B=1<<RXEN0|1<<TXEN0;
   UCSR0C=1<<UCSZ01|1<<UCSZ00; // 8 data, 1 stop bit, no parity
   DDR(LED_PORT)|=1<<LED_PIN;
+  PORT(MANUAL_MODE_PORT)|=1<<MANUAL_MODE_PIN; // enable pull-up
   flash_led(100,100,10); // say hello
   flash_led(1000,1000,1); // say hello
-  send_msg("\r\n\r\nPTL-INO REPLICATOR\r\nPress P or A to enter manual PIC or AVR modes\r\n\r\n");
+  send_msg("\r\n\r\n\r\n\r\n"
+" ___ _____ _       _                         _ _         _           \r\n"
+"| _ \\_   _| |  ___(_)_ _  ___   _ _ ___ _ __| (_)__ __ _| |_ ___ _ _ \r\n"
+"|  _/ | | | |_|___| | ' \\/ _ \\ | '_/ -_) '_ \\ | / _/ _` |  _/ _ \\ '_|\r\n"
+"|_|   |_| |____|  |_|_||_\\___/ |_| \\___| .__/_|_\\__\\__,_|\\__\\___/_|  \r\n"
+"                                     |_|                             \r\n"
+"Send any character or connect A0 to GND to enter manual mode...\r\n\r\n"
+  );
   while (1) {
-    int c;
-    if ((c=getch())!=-1) {
-      // ENTER MANUAL PROCEDURE
-      switch (c) {
-        case 'P': pic_manual();
-        case 'A': avr_manual();
-      }
+    if (getch()!=-1 || (PIN(MANUAL_MODE_PORT)&1<<MANUAL_MODE_PIN)==0) {
+       manual_mode();
     }
     else {
       // FLASH COUNTDOWN
@@ -557,40 +705,46 @@ void main() {
       flash_led(125,1250,1);
       // AUTOMATIC PROCEDURE
       // PIC PROGRAMMING
-      send_msg("Trying to enter PIC programming mode...\r\n");
-      if (pic_icsp_enter()) {
-        send_msg("... PIC found! Programming it...\r\n");
-        flash_led(100,400,3); // signal PIC programming attempt
-        if (pic_icsp_program()) {
-          send_msg("... PIC programming SUCCESSFUL...\r\n");
-          flash_led(100,100,5); // signal success
+      if (!programmed_pic) {
+        send_msg("Trying to enter PIC programming mode...\r\n");
+        if (pic_icsp_enter()) {
+          send_msg("... PIC found! Programming it...\r\n");
+          flash_led(100,400,3); // signal PIC programming attempt
+          if (pic_icsp_program()) {
+            send_msg("... PIC programming SUCCESSFUL...\r\n");
+            flash_led(100,100,5); // signal success
+            programmed_pic=1;
+          }
+          else {
+            send_msg("... PIC programming FAILED...\r\n");
+            flash_led(900,100,5); // signal error
+          }
         }
         else {
-          send_msg("... PIC programming FAILED...\r\n");
-          flash_led(900,100,5); // signal error
+          send_msg("... no PIC found...\r\n");
         }
+        send_msg("... leaving PIC programming mode\r\n\r\n");
+        pic_icsp_leave();
       }
-      else {
-        send_msg("... no PIC found...\r\n");
-      }
-      send_msg("... leaving PIC programming mode\r\n\r\n");
-      pic_icsp_leave();
       // AVR PROGRAMMING
-      send_msg("Trying to enter AVR programming mode...\r\n");
-      if (avr_isp_enter()) {
-        send_msg("... AVR found! Programming it...\r\n");
-        flash_led(400,100,3); // signal AVR programming attempt
-        if (avr_isp_program()) {
-          send_msg("... AVR programming SUCCESSFUL...\r\n");
-          flash_led(100,100,5); // signal success
+      if (!programmed_avr) {
+        send_msg("Trying to enter AVR programming mode...\r\n");
+        if (avr_isp_enter()) {
+          send_msg("... AVR found! Programming it...\r\n");
+          flash_led(400,100,3); // signal AVR programming attempt
+          if (avr_isp_program()) {
+            send_msg("... AVR programming SUCCESSFUL...\r\n");
+            flash_led(100,100,5); // signal success
+            programmed_avr=1;
+          }
+          else {
+            send_msg("... AVR programming FAILED...\r\n");
+            flash_led(900,100,5); // signal error
+          }
         }
-        else {
-          send_msg("... AVR programming FAILED...\r\n");
-          flash_led(900,100,5); // signal error
-        }
+        send_msg("... leaving AVR programming mode\r\n\r\n");
+        avr_isp_leave();
       }
-      send_msg("... leaving AVR programming mode\r\n\r\n");
-      avr_isp_leave();
     }
   }
 }
