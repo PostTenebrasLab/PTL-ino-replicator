@@ -172,6 +172,7 @@ uint8_t pic_icsp_program_hexfile() {
   do {
     while ((n=Serial.readBytesUntil('\n',line,sizeof(line)))==0);
     if (n==sizeof(line)) return 10; // potential overflow
+    if (line[n-1]=='\r') n-=1;
     if (n<11) return 1; // ':CCAAAARRSS'
     if (line[0]!=':') return 2;
     bytecount =hex2int(&line[  1],2);
