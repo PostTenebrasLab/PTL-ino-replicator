@@ -25,28 +25,29 @@
 * \_(_)| || |(/_(_ |_|(_)| |  |_(_||_)|(/_                                   *
 *                                                                            *
 * HOST       TARGET                                                          *
-* =========  ==============                                                  *
+* =========  ==================                                              *
 * GND        GND                                                             *
 * +5V        +5V                                                             *
-* 18 (PC4)    /RST (AVR /RST)                                                *
-* 10 (PB2)    13 (PB5, AVR SCK)                                              *
-*  9 (PB1)    12 (PB4, AVR MISO)                                             *
-*  8 (PB0)    11 (PB3, MOSI)                                                 *
-*  7 (PD7)    PIC MCLR                                                       *
-*  6 (PD6)    PIC DAT                                                        *
-*  5 (PD5)    PIC CLK                                                        *
+* 18 (PC4)   /RST (AVR /RST)                                                 *
+* 10 (PB2)   13 (PB5, AVR SCK)                                               *
+*  9 (PB1)   12 (PB4, AVR MISO)                                              *
+*  8 (PB0)   11 (PB3, MOSI)                                                  *
+*  7 (PD7)   PIC MCLR                                                        *
+*  6 (PD6)   PIC DAT                                                         *
+*  5 (PD5)   PIC CLK                                                         *
 *  _                                                                         *
 * / \._  _ .__._|_o._  _  ._ _  _  _| _  _                                   *
 * \_/|_)(/_|(_| |_|| |(_| | | |(_)(_|(/__>                                   *
 *    |                 _|                                                    *
 * A0   A1   MODE                                                             *
-* ===  ===  =====================                                            *
+* ===  ===  ===================================                              *
 * NC   NC   automatic (once)                                                 *
 * GND  NC   manual mode (console)                                            *
 * NC   GND  PIC hex file                                                     *
-* GND  GND  reserved                                                         *
+* GND  GND  serial pass through (9k6) RX=2,TX=3                              *
 *****************************************************************************/
 
+#include <SoftwareSerial.h>
 #include <avr/boot.h>
 #include <avr/pgmspace.h>
 #include "avr_isp.h"
@@ -58,6 +59,8 @@
 int ledPin=13;
 int mode0Pin=A0;
 int mode1Pin=A1;
+int rxPin=2;
+int txPin=3;
 
 uint8_t programmed_pic;
 uint8_t programmed_avr;
@@ -69,6 +72,27 @@ void flash_led(int mson,int msoff,int n) {
     digitalWrite(ledPin,LOW);
     delay(msoff);
   }
+}
+
+void serial_passthrough() {
+  Serial.println(F("Entering serial pass-through mode. 9k6. Pins: RX=2,TX=3."));
+  SoftwareSerial softserial(rxPin,txPin);
+  softserial.begin(9600);
+  while (true) {
+    if (softserial.available()) Serial.write(softserial.read());
+    if (Serial.available()) softserial.write(Serial.read());
+  }
+}
+
+void serial_monitor() {
+  Serial.println(F("Entered serial monitor mode. 9k6. Pins: RX=2,TX=3 (nothing being sent though). Send anything to quit."));
+  SoftwareSerial softserial(rxPin,txPin);
+  softserial.begin(9600);
+  while (!Serial.available()) {
+    if (softserial.available()) Serial.write(softserial.read());
+  }
+  Serial.read();
+  softserial.end();
 }
 
 void avr_manual() {
@@ -229,12 +253,14 @@ void manual_mode() {
     Serial.print(F("Options:\r\n"
                    " - P: PIC\r\n"
                    " - A: AVR\r\n"
+                   " - S: serial monitor\r\n"
                    "> "
                 ));
     while ((c=Serial.read())==-1);
     switch (c) {
-      case 'p': case 'P': pic_manual();break;
-      case 'a': case 'A': avr_manual();break;
+      case 'p':case 'P': pic_manual();break;
+      case 'a':case 'A': avr_manual();break;
+      case 's':case 'S':Serial.println("S");serial_monitor();break;
     }
   }  while (!(c=='q' || c=='!'));
   Serial.print(F("LEAVING MANUAL MODE"));
@@ -250,7 +276,8 @@ void setup() {
 
   Serial.begin(9600);
 
-  if (digitalRead(mode0Pin)==HIGH && digitalRead(mode1Pin)==LOW) {
+  if (digitalRead(mode0Pin)==HIGH && digitalRead(mode1Pin)==LOW
+   || digitalRead(mode0Pin)==LOW  && digitalRead(mode1Pin)==LOW) {
     // done waste time...
   }
   else {
@@ -314,6 +341,9 @@ void loop() {
     Serial.println(F("Entering manual mode..."));
     manual_mode();
     done();
+  }
+  else if (digitalRead(mode0Pin)==LOW  && digitalRead(mode1Pin)==LOW) {
+    serial_passthrough();
   }
   else {
     // PIC PROGRAMMING
