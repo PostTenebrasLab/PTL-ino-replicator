@@ -91,7 +91,7 @@ uint8_t pic_icsp_enter() {
     pic_icsp_cmd(0x06); // increment address
   pic_icsp_cmd(0x04);
   uint16_t id=pic_icsp_read();
-  return id==PIC_DEVICE_ID;
+  return id==PIC16F1455_DEVICE_ID || id==PIC16F1454_DEVICE_ID;
 }
 
 void pic_icsp_leave() {

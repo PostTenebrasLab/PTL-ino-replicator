@@ -19,7 +19,8 @@
 
 #include <Arduino.h>
 
-#define PIC_DEVICE_ID 0x3021
+#define PIC16F1454_DEVICE_ID 0x3020
+#define PIC16F1455_DEVICE_ID 0x3021
 #define PIC_ICSP_MCLR_PORT D
 #define PIC_ICSP_MCLR_PIN  7
 #define PIC_ICSP_CLK_PORT  D
